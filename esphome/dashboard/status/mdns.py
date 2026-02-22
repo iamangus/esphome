@@ -105,9 +105,16 @@ class MDNSStatus:
             # If we just adopted/imported this host, we likely
             # already have a state for it, so we should make sure
             # to set it so the dashboard shows it as online
-            if entry.loaded_integrations and "api" not in entry.loaded_integrations:
+            if (
+                entry.loaded_integrations and "api" not in entry.loaded_integrations
+            ) or entry.mdns_resolve_address:
                 # No api available so we have to poll since
                 # the device won't respond to a request to ._esphomelib._tcp.local.
+                # Also poll devices with mdns_resolve_address=True (e.g. OpenThread)
+                # since their _esphomelib._tcp.local. service may not be visible
+                # to the dashboard's zeroconf browser via the Thread Border Router.
+                # Active polling ensures addresses are cached in zeroconf and the
+                # device status is kept up to date.
                 poll_names.setdefault(entry.name, set()).add(entry)
             elif (online := host_mdns_state.get(entry.name, SENTINEL)) != SENTINEL:
                 self._async_set_state(entry, online)

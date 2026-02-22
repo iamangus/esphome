@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 import pytest_asyncio
@@ -238,3 +238,159 @@ async def test_on_import_update_device_removed(mdns_status: MDNSStatus) -> None:
     mdns_status.dashboard.bus.async_fire.assert_called_once_with(
         DashboardEvent.IMPORTABLE_DEVICE_REMOVED, {"name": "removed_device"}
     )
+
+
+def _make_entry(
+    *,
+    name: str,
+    no_mdns: bool = False,
+    loaded_integrations: set[str] | None = None,
+    mdns_resolve_address: bool = False,
+) -> Mock:
+    """Helper to create a mock DashboardEntry."""
+    entry = Mock()
+    entry.name = name
+    entry.no_mdns = no_mdns
+    entry.loaded_integrations = loaded_integrations or set()
+    entry.mdns_resolve_address = mdns_resolve_address
+    return entry
+
+
+@pytest.mark.asyncio
+async def test_async_refresh_hosts_mdns_resolve_address_with_api_is_polled(
+    mdns_status: MDNSStatus,
+) -> None:
+    """Verify that mdns_resolve_address=True entries with API are actively polled.
+
+    Previously, devices with API were skipped from poll_names and relied on the
+    DashboardStatus browser callback. For OpenThread devices whose
+    _esphomelib._tcp.local. service may not be visible to the dashboard's
+    zeroconf browser via the Thread Border Router, this meant their state was
+    never updated and their addresses were never cached. The fix adds
+    mdns_resolve_address=True entries to poll_names regardless of API presence.
+    """
+    # OpenThread device: has API and mdns_resolve_address=True
+    ot_entry = _make_entry(
+        name="thread-device",
+        loaded_integrations={"api", "openthread"},
+        mdns_resolve_address=True,
+    )
+    mdns_status.dashboard.entries.async_all.return_value = [ot_entry]
+    mdns_status.aiozc = AsyncMock()
+    mdns_status.aiozc.async_resolve_host = AsyncMock(
+        return_value=["fd11:22:33:44::1"]
+    )
+
+    await mdns_status.async_refresh_hosts()
+
+    # Should have been polled via async_resolve_host (not skipped for having API)
+    mdns_status.aiozc.async_resolve_host.assert_called_once_with("thread-device")
+
+
+@pytest.mark.asyncio
+async def test_async_refresh_hosts_mdns_resolve_address_sets_online_when_resolved(
+    mdns_status: MDNSStatus,
+) -> None:
+    """Verify that mdns_resolve_address=True device becomes ONLINE when address resolves."""
+    from esphome.dashboard.entries import EntryStateSource, ReachableState
+
+    ot_entry = _make_entry(
+        name="thread-device",
+        loaded_integrations={"api", "openthread"},
+        mdns_resolve_address=True,
+    )
+    mdns_status.dashboard.entries.async_all.return_value = [ot_entry]
+    mdns_status.aiozc = AsyncMock()
+    mdns_status.aiozc.async_resolve_host = AsyncMock(
+        return_value=["fd11:22:33:44::1"]
+    )
+
+    await mdns_status.async_refresh_hosts()
+
+    # State should be set to ONLINE from MDNS source
+    mdns_status.dashboard.entries.async_set_state.assert_called_once()
+    call_args = mdns_status.dashboard.entries.async_set_state.call_args
+    state = call_args[0][1]
+    assert state.reachable == ReachableState.ONLINE
+    assert state.source == EntryStateSource.MDNS
+
+
+@pytest.mark.asyncio
+async def test_async_refresh_hosts_mdns_resolve_address_sets_offline_when_unresolved(
+    mdns_status: MDNSStatus,
+) -> None:
+    """Verify that mdns_resolve_address=True device becomes OFFLINE when address fails."""
+    from esphome.dashboard.entries import EntryStateSource, ReachableState
+
+    ot_entry = _make_entry(
+        name="thread-device",
+        loaded_integrations={"api", "openthread"},
+        mdns_resolve_address=True,
+    )
+    # Set current state to UNKNOWN so the offline state can be written
+    from esphome.dashboard.entries import UNKNOWN_STATE
+    ot_entry.state = UNKNOWN_STATE
+    mdns_status.dashboard.entries.async_all.return_value = [ot_entry]
+    mdns_status.aiozc = AsyncMock()
+    # Resolution fails: returns None
+    mdns_status.aiozc.async_resolve_host = AsyncMock(return_value=None)
+
+    await mdns_status.async_refresh_hosts()
+
+    # Should call async_set_state_if_source (since result is False)
+    mdns_status.dashboard.entries.async_set_state_if_source.assert_called_once()
+    call_args = mdns_status.dashboard.entries.async_set_state_if_source.call_args
+    state = call_args[0][1]
+    assert state.reachable == ReachableState.OFFLINE
+    assert state.source == EntryStateSource.MDNS
+
+
+@pytest.mark.asyncio
+async def test_async_refresh_hosts_normal_api_device_uses_host_mdns_state(
+    mdns_status: MDNSStatus,
+) -> None:
+    """Verify that normal devices with API still use host_mdns_state (not poll_names)."""
+    from esphome.dashboard.entries import EntryStateSource, ReachableState
+
+    # Normal WiFi device with API (not mdns_resolve_address)
+    wifi_entry = _make_entry(
+        name="wifi-device",
+        loaded_integrations={"api", "wifi"},
+        mdns_resolve_address=False,
+    )
+    mdns_status.dashboard.entries.async_all.return_value = [wifi_entry]
+    mdns_status.aiozc = AsyncMock()
+    mdns_status.aiozc.async_resolve_host = AsyncMock(return_value=["192.168.1.10"])
+    # Simulate browser having seen this device
+    mdns_status.host_mdns_state["wifi-device"] = True
+
+    await mdns_status.async_refresh_hosts()
+
+    # Normal API device should NOT be polled via async_resolve_host
+    mdns_status.aiozc.async_resolve_host.assert_not_called()
+    # Should have been updated from host_mdns_state
+    mdns_status.dashboard.entries.async_set_state.assert_called_once()
+    call_args = mdns_status.dashboard.entries.async_set_state.call_args
+    state = call_args[0][1]
+    assert state.reachable == ReachableState.ONLINE
+    assert state.source == EntryStateSource.MDNS
+
+
+@pytest.mark.asyncio
+async def test_async_refresh_hosts_no_api_device_still_polled(
+    mdns_status: MDNSStatus,
+) -> None:
+    """Verify that devices without API are still polled via poll_names."""
+    no_api_entry = _make_entry(
+        name="no-api-device",
+        loaded_integrations={"mqtt"},
+        mdns_resolve_address=False,
+    )
+    mdns_status.dashboard.entries.async_all.return_value = [no_api_entry]
+    mdns_status.aiozc = AsyncMock()
+    mdns_status.aiozc.async_resolve_host = AsyncMock(return_value=["192.168.1.20"])
+
+    await mdns_status.async_refresh_hosts()
+
+    # No-API device should still be polled via async_resolve_host
+    mdns_status.aiozc.async_resolve_host.assert_called_once_with("no-api-device")
