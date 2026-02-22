@@ -21,6 +21,23 @@ export PLATFORMIO_PLATFORMS_DIR="${pio_cache_base}/platforms"
 export PLATFORMIO_PACKAGES_DIR="${pio_cache_base}/packages"
 export PLATFORMIO_CACHE_DIR="${pio_cache_base}/cache"
 
+# Seed runtime directories with pre-installed packages from the Docker image
+# so that platforms/tools (e.g. tool-cmake) are available without downloading
+pio_default_dir="${HOME}/.platformio"
+for subdir in platforms packages; do
+    src="${pio_default_dir}/${subdir}"
+    dst="${pio_cache_base}/${subdir}"
+    if [[ -d "${src}" ]]; then
+        mkdir -p "${dst}"
+        for pkg in "${src}"/*; do
+            pkg_name="$(basename "${pkg}")"
+            if [[ ! -e "${dst}/${pkg_name}" ]]; then
+                cp -a "${pkg}" "${dst}/${pkg_name}"
+            fi
+        done
+    fi
+done
+
 # If /build is mounted, use that as the build path
 # otherwise use path in /config (so that builds aren't lost on container restart)
 if [[ -d /build ]]; then

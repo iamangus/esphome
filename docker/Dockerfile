@@ -38,7 +38,7 @@ RUN \
     && mkdir -p /piolibs
 
 COPY script/platformio_install_deps.py platformio.ini /
-RUN /platformio_install_deps.py /platformio.ini --libraries
+RUN /platformio_install_deps.py /platformio.ini --libraries --platforms --tools
 
 ARG BUILD_VERSION
 
