@@ -4,7 +4,7 @@ from enum import Enum
 
 from esphome.enum import StrEnum
 
-__version__ = "2026.2.1"
+__version__ = "2026.3.0-dev"
 
 ALLOWED_NAME_CHARS = "abcdefghijklmnopqrstuvwxyz0123456789-_"
 VALID_SUBSTITUTIONS_CHARACTERS = (
@@ -943,7 +943,6 @@ CONF_SPI = "spi"
 CONF_SPI_ID = "spi_id"
 CONF_SPIKE_REJECTION = "spike_rejection"
 CONF_SSID = "ssid"
-CONF_SSL_FINGERPRINTS = "ssl_fingerprints"
 CONF_STARTUP_DELAY = "startup_delay"
 CONF_STATE = "state"
 CONF_STATE_CLASS = "state_class"

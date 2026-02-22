@@ -31,6 +31,28 @@ DNS_FAILURE_STATE = EntryState(ReachableState.DNS_FAILURE, EntryStateSource.PING
 MIN_PING_INTERVAL = 5  # ensure we don't ping too often
 
 
+async def _resolve_entry_address(
+    dashboard: ESPHomeDashboard,
+    entry: DashboardEntry,
+    now_monotonic: float,
+) -> list[str] | Exception:
+    """Resolve the address for a dashboard entry.
+
+    For entries with ``mdns_resolve_address=True`` (e.g. OpenThread devices),
+    uses python-zeroconf (application-level mDNS) to resolve the device's IPv6
+    address, bypassing the OS resolver which may not be able to reach Thread
+    mesh-local addresses.
+
+    Falls back to the DNS cache (system resolver) for all other entries.
+    """
+    if entry.mdns_resolve_address and (mdns := dashboard.mdns_status):
+        addresses = await mdns.async_resolve_host(entry.name)
+        if addresses:
+            return addresses
+        return Exception(f"mDNS resolution failed for {entry.name}")
+    return await dashboard.dns_cache.async_resolve(entry.address, now_monotonic)
+
+
 class PingStatus:
     def __init__(self, dashboard: ESPHomeDashboard) -> None:
         """Initialize the PingStatus class."""
@@ -77,7 +99,7 @@ class PingStatus:
                 now_monotonic = time.monotonic()
                 dns_results = await asyncio.gather(
                     *(
-                        dashboard.dns_cache.async_resolve(entry.address, now_monotonic)
+                        _resolve_entry_address(dashboard, entry, now_monotonic)
                         for entry in ping_group
                     ),
                     return_exceptions=True,

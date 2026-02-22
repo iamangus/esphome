@@ -400,6 +400,19 @@ class DashboardEntry:
         return self.storage.no_mdns
 
     @property
+    def mdns_resolve_address(self) -> bool:
+        """Return whether to resolve address via application-level mDNS (python-zeroconf).
+
+        When True, the backend will use python-zeroconf to resolve the device's IPv6
+        address instead of relying on the OS resolver. This is useful for OpenThread
+        devices whose Thread mesh-local IPv6 addresses may not be resolvable via the
+        system DNS/mDNS stack.
+        """
+        if self.storage is None:
+            return False
+        return bool(self.storage.mdns_resolve_address)
+
+    @property
     def web_port(self) -> int | None:
         """Return the web port of this entry."""
         if self.storage is None:

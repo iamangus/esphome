@@ -8,7 +8,7 @@ import os
 from pathlib import Path
 
 from esphome import const
-from esphome.const import CONF_DISABLED, CONF_MDNS
+from esphome.const import CONF_DISABLED, CONF_MDNS, CONF_OPENTHREAD
 from esphome.core import CORE
 from esphome.helpers import write_file_if_changed
 from esphome.types import CoreType
@@ -64,6 +64,7 @@ class StorageJSON:
         no_mdns: bool,
         framework: str | None = None,
         core_platform: str | None = None,
+        mdns_resolve_address: bool = False,
     ) -> None:
         # Version of the storage JSON schema
         assert storage_version is None or isinstance(storage_version, int)
@@ -100,6 +101,10 @@ class StorageJSON:
         self.framework = framework
         # The core platform of this firmware. Like "esp32", "rp2040", "host" etc.
         self.core_platform = core_platform
+        # Resolve device address via application-level mDNS (python-zeroconf) instead
+        # of using the OS resolver. Enabled for OpenThread devices to obtain their
+        # Thread mesh-local IPv6 address.
+        self.mdns_resolve_address = mdns_resolve_address
 
     def as_dict(self):
         return {
@@ -119,6 +124,7 @@ class StorageJSON:
             "no_mdns": self.no_mdns,
             "framework": self.framework,
             "core_platform": self.core_platform,
+            "mdns_resolve_address": self.mdns_resolve_address,
         }
 
     def to_json(self):
@@ -155,6 +161,11 @@ class StorageJSON:
             ),
             framework=esph.target_framework,
             core_platform=esph.target_platform,
+            mdns_resolve_address=(
+                CONF_OPENTHREAD in esph.config
+                and esph.config[CONF_OPENTHREAD].get("mdns_resolve_address", False)
+                is True
+            ),
         )
 
     @staticmethod
@@ -202,6 +213,7 @@ class StorageJSON:
         no_mdns = storage.get("no_mdns", False)
         framework = storage.get("framework")
         core_platform = storage.get("core_platform")
+        mdns_resolve_address = storage.get("mdns_resolve_address", False)
         return StorageJSON(
             storage_version,
             name,
@@ -219,6 +231,7 @@ class StorageJSON:
             no_mdns,
             framework,
             core_platform,
+            mdns_resolve_address,
         )
 
     @staticmethod
