@@ -20,6 +20,7 @@ from .const import (
     CONF_EXT_PAN_ID,
     CONF_FORCE_DATASET,
     CONF_MDNS_ID,
+    CONF_MDNS_RESOLVE_ADDRESS,
     CONF_MESH_LOCAL_PREFIX,
     CONF_NETWORK_KEY,
     CONF_NETWORK_NAME,
@@ -150,6 +151,7 @@ CONFIG_SCHEMA = cv.All(
             cv.Optional(CONF_TLV): cv.string_strict,
             cv.Optional(CONF_USE_ADDRESS): cv.string_strict,
             cv.Optional(CONF_POLL_PERIOD): cv.positive_time_period_milliseconds,
+            cv.Optional(CONF_MDNS_RESOLVE_ADDRESS, default=False): cv.boolean,
         }
     ).extend(_CONNECTION_SCHEMA),
     cv.has_exactly_one_key(CONF_NETWORK_KEY, CONF_TLV),

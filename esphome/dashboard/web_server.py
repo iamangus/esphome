@@ -426,6 +426,20 @@ class EsphomePortCommandWebSocket(EsphomeCommandWebSocket):
             and entry.loaded_integrations
             and "api" in entry.loaded_integrations
         ):
+            # For entries that need application-level mDNS resolution, pre-resolve the
+            # address via python-zeroconf so build_cache_arguments can include it.
+            if (
+                entry.mdns_resolve_address
+                and entry.address
+                and entry.address.endswith(".local")
+                and (mdns := dashboard.mdns_status)
+                and mdns.aiozc
+                and not mdns.get_cached_addresses(entry.address)
+            ):
+                _LOGGER.debug(
+                    "Pre-resolving %s via mDNS for OpenThread device", entry.address
+                )
+                await mdns.async_resolve_host(entry.name)
             cache_args = build_cache_arguments(entry, dashboard, time.monotonic())
 
         # Cache arguments must come before the subcommand

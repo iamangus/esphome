@@ -286,3 +286,65 @@ async def test_async_update_entries_updated_path(
     mock_dashboard.bus.async_fire.assert_any_call(
         DashboardEvent.ENTRY_UPDATED, {"entry": entry}
     )
+
+
+def test_dashboard_entry_mdns_resolve_address_no_storage() -> None:
+    """Test mdns_resolve_address returns False when no storage."""
+    entry = DashboardEntry(Path("/test/device.yaml"), (0, 0, 0.0, 0))
+    entry.storage = None
+
+    assert entry.mdns_resolve_address is False
+
+
+def test_dashboard_entry_mdns_resolve_address_false() -> None:
+    """Test mdns_resolve_address returns False when storage has False."""
+    from esphome.storage_json import StorageJSON
+
+    entry = DashboardEntry(Path("/test/device.yaml"), (0, 0, 0.0, 0))
+    storage = StorageJSON(
+        storage_version=1,
+        name="test_device",
+        friendly_name="Test Device",
+        comment=None,
+        esphome_version="2024.1.0",
+        src_version=1,
+        address="test_device.local",
+        web_port=None,
+        target_platform="ESP32",
+        build_path=None,
+        firmware_bin_path=None,
+        loaded_integrations={"wifi", "api"},
+        loaded_platforms=set(),
+        no_mdns=False,
+        mdns_resolve_address=False,
+    )
+    entry.storage = storage
+
+    assert entry.mdns_resolve_address is False
+
+
+def test_dashboard_entry_mdns_resolve_address_true() -> None:
+    """Test mdns_resolve_address returns True for OpenThread devices with flag set."""
+    from esphome.storage_json import StorageJSON
+
+    entry = DashboardEntry(Path("/test/thread_device.yaml"), (0, 0, 0.0, 0))
+    storage = StorageJSON(
+        storage_version=1,
+        name="thread_device",
+        friendly_name="Thread Device",
+        comment=None,
+        esphome_version="2024.1.0",
+        src_version=1,
+        address="thread_device.local",
+        web_port=None,
+        target_platform="ESP32C6",
+        build_path=None,
+        firmware_bin_path=None,
+        loaded_integrations={"openthread", "api"},
+        loaded_platforms=set(),
+        no_mdns=False,
+        mdns_resolve_address=True,
+    )
+    entry.storage = storage
+
+    assert entry.mdns_resolve_address is True

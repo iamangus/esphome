@@ -658,3 +658,173 @@ def test_storage_json_load_legacy_esphomeyaml_version(tmp_path: Path) -> None:
 
     assert result is not None
     assert result.esphome_version == "1.14.0"  # Should map to esphome_version
+
+
+def test_storage_json_mdns_resolve_address_default() -> None:
+    """Test that mdns_resolve_address defaults to False."""
+    storage = storage_json.StorageJSON(
+        storage_version=1,
+        name="test",
+        friendly_name="Test",
+        comment=None,
+        esphome_version="2024.1.0",
+        src_version=None,
+        address="test.local",
+        web_port=None,
+        target_platform="ESP32",
+        build_path=None,
+        firmware_bin_path=None,
+        loaded_integrations=set(),
+        loaded_platforms=set(),
+        no_mdns=False,
+    )
+
+    assert storage.mdns_resolve_address is False
+    assert storage.as_dict()["mdns_resolve_address"] is False
+
+
+def test_storage_json_mdns_resolve_address_enabled() -> None:
+    """Test StorageJSON with mdns_resolve_address enabled."""
+    storage = storage_json.StorageJSON(
+        storage_version=1,
+        name="thread_device",
+        friendly_name="Thread Device",
+        comment=None,
+        esphome_version="2024.1.0",
+        src_version=1,
+        address="thread_device.local",
+        web_port=None,
+        target_platform="ESP32C6",
+        build_path=None,
+        firmware_bin_path=None,
+        loaded_integrations={"openthread", "api"},
+        loaded_platforms=set(),
+        no_mdns=False,
+        mdns_resolve_address=True,
+    )
+
+    assert storage.mdns_resolve_address is True
+    result = storage.as_dict()
+    assert result["mdns_resolve_address"] is True
+
+
+def test_storage_json_mdns_resolve_address_load_from_file(tmp_path: Path) -> None:
+    """Test loading mdns_resolve_address from JSON file."""
+    storage_data = {
+        "storage_version": 1,
+        "name": "thread_device",
+        "friendly_name": "Thread Device",
+        "address": "thread_device.local",
+        "esp_platform": "ESP32C6",
+        "mdns_resolve_address": True,
+    }
+
+    file_path = tmp_path / "thread_device.json"
+    file_path.write_text(json.dumps(storage_data))
+
+    result = storage_json.StorageJSON.load(file_path)
+
+    assert result is not None
+    assert result.mdns_resolve_address is True
+
+
+def test_storage_json_mdns_resolve_address_load_defaults_false(
+    tmp_path: Path,
+) -> None:
+    """Test that mdns_resolve_address defaults to False when missing from JSON."""
+    storage_data = {
+        "storage_version": 1,
+        "name": "normal_device",
+        "friendly_name": "Normal Device",
+        "address": "normal_device.local",
+        "esp_platform": "ESP32",
+        # No mdns_resolve_address key - should default to False
+    }
+
+    file_path = tmp_path / "normal_device.json"
+    file_path.write_text(json.dumps(storage_data))
+
+    result = storage_json.StorageJSON.load(file_path)
+
+    assert result is not None
+    assert result.mdns_resolve_address is False
+
+
+def test_storage_json_from_esphome_core_openthread_mdns_resolve(
+    setup_core: Path,
+) -> None:
+    """Test from_esphome_core sets mdns_resolve_address from openthread config."""
+    from esphome.const import CONF_OPENTHREAD
+
+    mock_core = MagicMock()
+    mock_core.name = "thread_device"
+    mock_core.friendly_name = "Thread Device"
+    mock_core.comment = None
+    mock_core.address = "thread_device.local"
+    mock_core.web_port = None
+    mock_core.target_platform = "esp32"
+    mock_core.is_esp32 = True
+    mock_core.build_path = "/build"
+    mock_core.firmware_bin = "/build/firmware.bin"
+    mock_core.loaded_integrations = {"openthread", "api"}
+    mock_core.loaded_platforms = set()
+    mock_core.config = {CONF_OPENTHREAD: {"mdns_resolve_address": True}}
+    mock_core.target_framework = "esp-idf"
+
+    with patch("esphome.components.esp32.get_esp32_variant") as mock_variant:
+        mock_variant.return_value = "ESP32-C6"
+        result = storage_json.StorageJSON.from_esphome_core(mock_core, old=None)
+
+    assert result.mdns_resolve_address is True
+
+
+def test_storage_json_from_esphome_core_openthread_no_mdns_resolve(
+    setup_core: Path,
+) -> None:
+    """Test from_esphome_core with openthread but mdns_resolve_address=False."""
+    from esphome.const import CONF_OPENTHREAD
+
+    mock_core = MagicMock()
+    mock_core.name = "thread_device"
+    mock_core.friendly_name = "Thread Device"
+    mock_core.comment = None
+    mock_core.address = "thread_device.local"
+    mock_core.web_port = None
+    mock_core.target_platform = "esp32"
+    mock_core.is_esp32 = True
+    mock_core.build_path = "/build"
+    mock_core.firmware_bin = "/build/firmware.bin"
+    mock_core.loaded_integrations = {"openthread", "api"}
+    mock_core.loaded_platforms = set()
+    mock_core.config = {CONF_OPENTHREAD: {"mdns_resolve_address": False}}
+    mock_core.target_framework = "esp-idf"
+
+    with patch("esphome.components.esp32.get_esp32_variant") as mock_variant:
+        mock_variant.return_value = "ESP32-C6"
+        result = storage_json.StorageJSON.from_esphome_core(mock_core, old=None)
+
+    assert result.mdns_resolve_address is False
+
+
+def test_storage_json_from_esphome_core_no_openthread(setup_core: Path) -> None:
+    """Test from_esphome_core without openthread defaults mdns_resolve_address=False."""
+    mock_core = MagicMock()
+    mock_core.name = "wifi_device"
+    mock_core.friendly_name = "WiFi Device"
+    mock_core.comment = None
+    mock_core.address = "wifi_device.local"
+    mock_core.web_port = None
+    mock_core.target_platform = "esp32"
+    mock_core.is_esp32 = True
+    mock_core.build_path = "/build"
+    mock_core.firmware_bin = "/build/firmware.bin"
+    mock_core.loaded_integrations = {"wifi", "api"}
+    mock_core.loaded_platforms = set()
+    mock_core.config = {}  # No openthread
+    mock_core.target_framework = "arduino"
+
+    with patch("esphome.components.esp32.get_esp32_variant") as mock_variant:
+        mock_variant.return_value = "ESP32"
+        result = storage_json.StorageJSON.from_esphome_core(mock_core, old=None)
+
+    assert result.mdns_resolve_address is False
