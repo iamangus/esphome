@@ -434,12 +434,30 @@ class EsphomePortCommandWebSocket(EsphomeCommandWebSocket):
                 and entry.address.endswith(".local")
                 and (mdns := dashboard.mdns_status)
                 and mdns.aiozc
-                and not mdns.get_cached_addresses(entry.address)
             ):
-                _LOGGER.debug(
-                    "Pre-resolving %s via mDNS for OpenThread device", entry.address
-                )
-                await mdns.async_resolve_host(entry.name)
+                cached = mdns.get_cached_addresses(entry.address)
+                if cached:
+                    _LOGGER.debug(
+                        "Using cached mDNS address for %s: %s",
+                        entry.address,
+                        cached,
+                    )
+                else:
+                    _LOGGER.info(
+                        "Pre-resolving %s via mDNS for OpenThread device",
+                        entry.address,
+                    )
+                    resolved = await mdns.async_resolve_host(entry.name)
+                    if resolved:
+                        _LOGGER.info(
+                            "Resolved %s to %s via mDNS", entry.address, resolved
+                        )
+                    else:
+                        _LOGGER.warning(
+                            "mDNS resolution failed for %s; "
+                            "connection will use hostname and rely on OS resolver",
+                            entry.address,
+                        )
             cache_args = build_cache_arguments(entry, dashboard, time.monotonic())
 
         # Cache arguments must come before the subcommand
