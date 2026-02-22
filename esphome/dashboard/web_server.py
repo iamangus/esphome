@@ -423,8 +423,10 @@ class EsphomePortCommandWebSocket(EsphomeCommandWebSocket):
         if (
             port == "OTA"  # pylint: disable=too-many-boolean-expressions
             and (entry := entries.get(config_file))
-            and entry.loaded_integrations
-            and "api" in entry.loaded_integrations
+            and (
+                (entry.loaded_integrations and "api" in entry.loaded_integrations)
+                or entry.mdns_resolve_address
+            )
         ):
             # For entries that need application-level mDNS resolution, pre-resolve the
             # address via python-zeroconf so build_cache_arguments can include it.

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import typing
 
 from zeroconf import AddressResolver, IPVersion
@@ -25,6 +26,10 @@ if typing.TYPE_CHECKING:
 
 _LOGGER = logging.getLogger(__name__)
 
+# Matches a hostname that ends with a 6-hex-character MAC suffix, e.g. "device-a1b2c3".
+# ESPHome appends the last 3 bytes of the MAC address when name_add_mac_suffix is set.
+_MAC_SUFFIX_RE = re.compile(r"^(.+)-[0-9a-f]{6}$", re.IGNORECASE)
+
 
 class MDNSStatus:
     """Class that updates the mdns status."""
@@ -35,6 +40,11 @@ class MDNSStatus:
         self.aiozc: AsyncEsphomeZeroconf | None = None
         # This is the current mdns state for each host (True, False, None)
         self.host_mdns_state: dict[str, bool | None] = {}
+        # Maps base device name -> discovered MAC-suffixed hostname.
+        # Populated when the mDNS browser finds a service whose instance name
+        # matches the pattern "<base>-<6 hex chars>" and the base name corresponds
+        # to a known dashboard entry (e.g. name_add_mac_suffix: true devices).
+        self.mac_suffix_name_map: dict[str, str] = {}
         self._loop = asyncio.get_running_loop()
         self.dashboard = dashboard
 
@@ -50,15 +60,27 @@ class MDNSStatus:
         return True
 
     async def async_resolve_host(self, host_name: str) -> list[str] | None:
-        """Resolve a host name to an address in a thread-safe manner."""
+        """Resolve a host name to an address in a thread-safe manner.
+
+        When a MAC-suffixed variant of the hostname is known (from the mDNS
+        browser discovering a ``name_add_mac_suffix`` device), that name is used
+        directly to avoid a slow multicast timeout against a name that does not exist.
+        """
         if aiozc := self.aiozc:
-            return await aiozc.async_resolve_host(host_name)
+            # Use the MAC-suffixed name if one has been discovered for this base name.
+            # This handles devices with name_add_mac_suffix: true, where the device
+            # registers as e.g. "device-aabbcc.local." instead of "device.local.".
+            effective_name = self.mac_suffix_name_map.get(host_name, host_name)
+            return await aiozc.async_resolve_host(effective_name)
         return None
 
     def get_cached_addresses(self, host_name: str) -> list[str] | None:
         """Get cached addresses for a host without triggering resolution.
 
         Returns None if not in cache or no zeroconf available.
+        Falls back to the MAC-suffixed variant (from ``mac_suffix_name_map``) when
+        the base name is not cached, so OTA pre-resolution works for devices with
+        ``name_add_mac_suffix: true``.
         """
         if not self.aiozc:
             _LOGGER.debug("No zeroconf instance available for %s", host_name)
@@ -76,6 +98,22 @@ class MDNSStatus:
             addresses = info.parsed_scoped_addresses(IPVersion.All)
             _LOGGER.debug("Found %s in zeroconf cache: %s", resolver_name, addresses)
             return addresses
+
+        # Fall back to the MAC-suffixed variant if one is known.
+        # This handles name_add_mac_suffix: true devices whose actual mDNS hostname
+        # is e.g. "device-aabbcc.local." rather than "device.local.".
+        if mac_name := self.mac_suffix_name_map.get(base_name):
+            mac_resolver_name = f"{mac_name}.local."
+            mac_info = AddressResolver(mac_resolver_name)
+            if mac_info.load_from_cache(self.aiozc.zeroconf):
+                addresses = mac_info.parsed_scoped_addresses(IPVersion.All)
+                _LOGGER.debug(
+                    "Found %s in zeroconf cache via MAC-suffix fallback: %s",
+                    mac_resolver_name,
+                    addresses,
+                )
+                return addresses
+
         _LOGGER.debug("Not found in zeroconf cache: %s", resolver_name)
         return None
 
@@ -115,7 +153,11 @@ class MDNSStatus:
                 # to the dashboard's zeroconf browser via the Thread Border Router.
                 # Active polling ensures addresses are cached in zeroconf and the
                 # device status is kept up to date.
-                poll_names.setdefault(entry.name, set()).add(entry)
+                #
+                # Use the MAC-suffixed name if one has been discovered, so that
+                # devices with name_add_mac_suffix: true resolve correctly.
+                poll_name = self.mac_suffix_name_map.get(entry.name, entry.name)
+                poll_names.setdefault(poll_name, set()).add(entry)
             elif (online := host_mdns_state.get(entry.name, SENTINEL)) != SENTINEL:
                 self._async_set_state(entry, online)
         if poll_names and self.aiozc:
@@ -154,6 +196,17 @@ class MDNSStatus:
                 if matching_entries := entries.get_by_name(name):
                     for entry in matching_entries:
                         self._async_set_state(entry, result)
+                elif mac_match := _MAC_SUFFIX_RE.match(name):
+                    # No direct entry found but the name looks like a MAC-suffixed
+                    # variant (e.g. "device-a1b2c3" from name_add_mac_suffix: true).
+                    # Map it to its base name so that mDNS resolution and cache
+                    # lookups use the correct hostname for all wireless operations
+                    # (status, OTA, API, logs, etc.).
+                    base_name = mac_match.group(1)
+                    if base_entries := entries.get_by_name(base_name):
+                        self.mac_suffix_name_map[base_name] = name
+                        for entry in base_entries:
+                            self._async_set_state(entry, result)
 
         stat = DashboardStatus(on_update)
 

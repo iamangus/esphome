@@ -394,3 +394,155 @@ async def test_async_refresh_hosts_no_api_device_still_polled(
 
     # No-API device should still be polled via async_resolve_host
     mdns_status.aiozc.async_resolve_host.assert_called_once_with("no-api-device")
+
+
+# ---------------------------------------------------------------------------
+# MAC-suffix (name_add_mac_suffix: true) tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_mac_suffix_on_update_populates_map_and_sets_state(
+    mdns_status: MDNSStatus,
+) -> None:
+    """When the mDNS browser discovers a MAC-suffixed name that matches a known
+    entry's base name, mac_suffix_name_map is populated and the entry's state is
+    set — this is how name_add_mac_suffix: true devices become ONLINE."""
+    from esphome.dashboard.entries import EntryStateSource, ReachableState
+
+    base_entry = _make_entry(
+        name="fishtank-lights",
+        loaded_integrations={"api", "openthread"},
+        mdns_resolve_address=True,
+    )
+    mdns_status.dashboard.entries.async_all.return_value = [base_entry]
+    mdns_status.dashboard.entries.get_by_name = Mock(
+        side_effect=lambda name: {base_entry} if name == "fishtank-lights" else None
+    )
+
+    # Simulate the browser having already populated the map (as on_update would do)
+    mdns_status.mac_suffix_name_map["fishtank-lights"] = "fishtank-lights-a1b2c3"
+    mdns_status.aiozc = AsyncMock()
+    mdns_status.aiozc.async_resolve_host = AsyncMock(
+        return_value=["fd11:22:33:44::1"]
+    )
+
+    await mdns_status.async_refresh_hosts()
+
+    # The poll should use the MAC-suffixed name, not the base name
+    mdns_status.aiozc.async_resolve_host.assert_called_once_with(
+        "fishtank-lights-a1b2c3"
+    )
+    # Entry should be set online
+    mdns_status.dashboard.entries.async_set_state.assert_called_once()
+    state = mdns_status.dashboard.entries.async_set_state.call_args[0][1]
+    assert state.reachable == ReachableState.ONLINE
+    assert state.source == EntryStateSource.MDNS
+
+
+@pytest.mark.asyncio
+async def test_async_resolve_host_uses_mac_suffix_name(
+    mdns_status: MDNSStatus,
+) -> None:
+    """async_resolve_host uses the MAC-suffixed name when it is in the map,
+    avoiding a slow multicast timeout for a base name that doesn't exist."""
+    mdns_status.aiozc = AsyncMock()
+    mdns_status.aiozc.async_resolve_host = AsyncMock(
+        return_value=["fd11:22:33:44::1"]
+    )
+    mdns_status.mac_suffix_name_map["fishtank-lights"] = "fishtank-lights-a1b2c3"
+
+    result = await mdns_status.async_resolve_host("fishtank-lights")
+
+    # Should resolve via the MAC-suffixed name
+    mdns_status.aiozc.async_resolve_host.assert_called_once_with(
+        "fishtank-lights-a1b2c3"
+    )
+    assert result == ["fd11:22:33:44::1"]
+
+
+@pytest.mark.asyncio
+async def test_async_resolve_host_falls_back_to_base_name(
+    mdns_status: MDNSStatus,
+) -> None:
+    """async_resolve_host uses the base name when no MAC-suffix mapping exists."""
+    mdns_status.aiozc = AsyncMock()
+    mdns_status.aiozc.async_resolve_host = AsyncMock(return_value=["192.168.1.5"])
+
+    result = await mdns_status.async_resolve_host("my-device")
+
+    mdns_status.aiozc.async_resolve_host.assert_called_once_with("my-device")
+    assert result == ["192.168.1.5"]
+
+
+@pytest.mark.asyncio
+async def test_get_cached_addresses_mac_suffix_fallback(
+    mdns_status: MDNSStatus,
+) -> None:
+    """get_cached_addresses falls back to the MAC-suffixed hostname when the base
+    name is not in the zeroconf cache.  This is what makes OTA / logs / API
+    connections work for name_add_mac_suffix: true devices."""
+    mdns_status.aiozc = Mock()
+    mdns_status.aiozc.zeroconf = Mock()
+    mdns_status.mac_suffix_name_map["fishtank-lights"] = "fishtank-lights-a1b2c3"
+
+    call_count = 0
+
+    def make_resolver(name):
+        nonlocal call_count
+        call_count += 1
+        mock_info = Mock(spec=AddressResolver)
+        if name == "fishtank-lights-a1b2c3.local.":
+            # MAC-suffixed name IS in cache
+            mock_info.load_from_cache.return_value = True
+            mock_info.parsed_scoped_addresses.return_value = ["fd11:22:33:44::1"]
+        else:
+            # Base name is NOT in cache
+            mock_info.load_from_cache.return_value = False
+        return mock_info
+
+    with patch(
+        "esphome.dashboard.status.mdns.AddressResolver", side_effect=make_resolver
+    ):
+        result = mdns_status.get_cached_addresses("fishtank-lights.local")
+
+    assert result == ["fd11:22:33:44::1"]
+    assert call_count == 2  # base name tried first, then MAC-suffixed
+
+
+@pytest.mark.asyncio
+async def test_get_cached_addresses_base_name_takes_priority(
+    mdns_status: MDNSStatus,
+) -> None:
+    """If the base name IS in the zeroconf cache, it is returned without
+    consulting the MAC-suffix map."""
+    mdns_status.aiozc = Mock()
+    mdns_status.aiozc.zeroconf = Mock()
+    mdns_status.mac_suffix_name_map["device"] = "device-a1b2c3"
+
+    with patch("esphome.dashboard.status.mdns.AddressResolver") as mock_resolver:
+        mock_info = Mock(spec=AddressResolver)
+        mock_info.load_from_cache.return_value = True
+        mock_info.parsed_scoped_addresses.return_value = ["192.168.1.10"]
+        mock_resolver.return_value = mock_info
+
+        result = mdns_status.get_cached_addresses("device.local")
+
+    assert result == ["192.168.1.10"]
+    # AddressResolver should only be constructed once (for the base name)
+    mock_resolver.assert_called_once_with("device.local.")
+
+
+@pytest.mark.asyncio
+async def test_mac_suffix_regex_matches_correctly() -> None:
+    """_MAC_SUFFIX_RE should match valid MAC-suffixed names and reject others."""
+    from esphome.dashboard.status.mdns import _MAC_SUFFIX_RE
+
+    assert _MAC_SUFFIX_RE.match("device-a1b2c3")
+    assert _MAC_SUFFIX_RE.match("fishtank-lights-aabbcc")
+    assert _MAC_SUFFIX_RE.match("my-device-000000")
+    assert _MAC_SUFFIX_RE.match("device-AbCdEf")  # mixed-case hex is valid
+    assert not _MAC_SUFFIX_RE.match("device-a1b2c")  # only 5 hex chars
+    assert not _MAC_SUFFIX_RE.match("device-a1b2c3d")  # 7 hex chars
+    assert not _MAC_SUFFIX_RE.match("device-zzzzzz")  # not hex
+    assert not _MAC_SUFFIX_RE.match("device")  # no suffix at all
