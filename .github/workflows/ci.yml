@@ -36,5 +36,7 @@ jobs:
           context: .
           file: docker/Dockerfile
           push: true
-          build-args: BUILD_VERSION=${{ steps.vars.outputs.tag }}
+          build-args: |
+            BUILD_VERSION=${{ steps.vars.outputs.tag }}
+            BUILD_OS=debian
           tags: ghcr.io/${{ steps.owner.outputs.name }}/esphome-thread:${{ steps.vars.outputs.tag }}
